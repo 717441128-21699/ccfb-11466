@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PyTimeSeries 时序存储控制台</title>
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">⏱</span>
+    <div>
+      <h1>PyTimeSeries</h1>
+      <p>单机时序数据库 · Gorilla 压缩 · 倒排索引 · 多级降采样</p>
+    </div>
+  </div>
+  <nav>
+    <button class="tab active" data-tab="browse">指标浏览</button>
+    <button class="tab" data-tab="query">查询编辑</button>
+    <button class="tab" data-tab="downsample">降采样策略</button>
+    <button class="tab" data-tab="storage">存储状态</button>
+    <button class="tab" data-tab="bench">写入压测</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ========== 指标浏览 ========== -->
+  <section id="tab-browse" class="panel active">
+    <div class="card">
+      <h2>指标与标签</h2>
+      <p class="hint">按标签倒排索引浏览序列, 选择后一键生成查询。</p>
+      <div class="grid4">
+        <label>指标
+          <select id="b-metric"></select>
+        </label>
+        <label>机房 idc
+          <select id="b-idc"><option value="">(全部)</option></select>
+        </label>
+        <label>设备 device
+          <select id="b-device"><option value="">(全部)</option></select>
+        </label>
+        <label>端口 port
+          <select id="b-port"><option value="">(全部)</option></select>
+        </label>
+      </div>
+      <div class="row">
+        <label>时间范围
+          <select id="b-range">
+            <option value="1800">近 30 分钟</option>
+            <option value="3600" selected>近 1 小时</option>
+            <option value="21600">近 6 小时</option>
+            <option value="86400">近 1 天</option>
+            <option value="604800">近 7 天</option>
+            <option value="2592000">近 30 天</option>
+          </select>
+        </label>
+        <label>粒度(秒) <input id="b-step" type="number" value="300" min="30"></label>
+        <label><input type="checkbox" id="b-rate" checked> rate() 速率口径</label>
+        <button class="primary" id="b-run">绘制曲线</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>图表</h2>
+      <canvas id="b-chart" height="340"></canvas>
+      <div id="b-legend" class="legend"></div>
+    </div>
+  </section>
+
+  <!-- ========== 查询编辑 ========== -->
+  <section id="tab-query" class="panel">
+    <div class="card">
+      <h2>查询编辑器</h2>
+      <p class="hint">
+        语法: <code>metric{label="值"}</code> ·
+        <code>rate(...)</code> ·
+        <code>sum|max|min|avg|count|quantile(0.95) by (标签) (...)</code>
+      </p>
+      <textarea id="q-text" rows="3" spellcheck="false">sum by (idc) (rate(if_port_in_bytes))</textarea>
+      <div class="row">
+        <label>开始 <input id="q-start" type="datetime-local" step="1"></label>
+        <label>结束 <input id="q-end" type="datetime-local" step="1"></label>
+        <label>粒度(秒) <input id="q-step" type="number" value="300" min="30"></label>
+        <button class="ghost" id="q-quick">近 1 小时</button>
+        <button class="primary" id="q-run">执行查询</button>
+      </div>
+      <div class="examples">
+        <span>示例:</span>
+        <button class="chip" data-q='if_port_in_bytes{device="sw-0001"}'>单设备原始点</button>
+        <button class="chip" data-q='rate(if_port_in_errors{idc="bj-1"})'>机房错包速率</button>
+        <button class="chip" data-q='sum by (idc) (rate(if_port_in_bytes))'>机房流量汇总</button>
+        <button class="chip" data-q='max by (port) (rate(if_port_out_drops))'>端口最大丢包</button>
+        <button class="chip" data-q='quantile(0.95) by (device) (rate(if_port_in_bytes))'>设备 P95</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>结果</h2>
+      <canvas id="q-chart" height="340"></canvas>
+      <div id="q-legend" class="legend"></div>
+      <details><summary>JSON 结果</summary><pre id="q-json"></pre></details>
+    </div>
+  </section>
+
+  <!-- ========== 降采样策略 ========== -->
+  <section id="tab-downsample" class="panel">
+    <div class="card">
+      <h2>保留与降采样策略</h2>
+      <table class="policy">
+        <thead><tr><th>层级</th><th>粒度</th><th>保留期</th><th>目录</th></tr></thead>
+        <tbody>
+          <tr><td>原始层 raw</td><td>30 秒</td><td>7 天</td><td><code>data/raw/</code></td></tr>
+          <tr><td>中间层 5m</td><td>5 分钟</td><td>90 天</td><td><code>data/5m/</code></td></tr>
+          <tr><td>长期层 1h</td><td>1 小时</td><td>2 年</td><td><code>data/1h/</code></td></tr>
+        </tbody>
+      </table>
+      <p class="hint">
+        到期前先聚合到下一层(计数器取安全增量之和, 自动处理回绕/重启清零;
+        仪表量取均值), 再删除过期块。水位线保证任务可重复执行。
+      </p>
+      <button class="primary" id="ds-run">立即执行一轮</button>
+      <span id="ds-status" class="status"></span>
+    </div>
+    <div class="card">
+      <h2>水位线与最近报告</h2>
+      <pre id="ds-report">尚未执行</pre>
+    </div>
+  </section>
+
+  <!-- ========== 存储状态 ========== -->
+  <section id="tab-storage" class="panel">
+    <div class="card">
+      <h2>存储状态 <button class="ghost small" id="st-refresh">刷新</button>
+        <label class="inline"><input type="checkbox" id="st-auto" checked> 5 秒自动刷新</label>
+      </h2>
+      <div class="kpis" id="st-kpis"></div>
+    </div>
+    <div class="card">
+      <h2>分层明细</h2>
+      <table id="st-table"><thead>
+        <tr><th>层</th><th>块数</th><th>点数</th><th>段文件</th><th>保留(秒)</th></tr>
+      </thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <!-- ========== 写入压测 ========== -->
+  <section id="tab-bench" class="panel">
+    <div class="card">
+      <h2>写入压测 / 数据造数</h2>
+      <div class="grid4">
+        <label>设备数 <input id="bm-devices" type="number" value="3000" min="1"></label>
+        <label>每设备端口 <input id="bm-ports" type="number" value="4" min="1"></label>
+        <label>批量大小 <input id="bm-batch" type="number" value="5000" min="100"></label>
+        <label>乱序比例 <input id="bm-ooo" type="number" value="0.02" min="0" max="1" step="0.01"></label>
+      </div>
+      <div class="grid4">
+        <label class="inline"><input type="checkbox" id="bm-wrap"> 注入 64 位回绕</label>
+        <label>重启清零率 <input id="bm-reset" type="number" value="0.0001" step="0.00001"></label>
+      </div>
+      <div class="row">
+        <button class="primary" id="bm-load">吞吐压测</button>
+        <label>压测点数 <input id="bm-points" type="number" value="2000000" min="10000"></label>
+        <button class="ghost" id="bm-gen">造一个月历史数据</button>
+        <label>造数天数 <input id="bm-days" type="number" value="30" min="0.01"></label>
+      </div>
+      <p id="bm-msg" class="status"></p>
+      <pre id="bm-result">尚无结果</pre>
+    </div>
+  </section>
+</main>
+
+<footer>PyTimeSeries · 纯 Python 标准库 · 块 CRC 掉电恢复 · 时间戳差值编码 · 数值 XOR 压缩</footer>
+<script src="/app.js"></script>
+</body>
+</html>

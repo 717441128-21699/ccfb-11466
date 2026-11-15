@@ -16,3 +16,11 @@ node_modules/
 __pycache__/
 .venv/
 venv/
+
+# 时序库运行数据与本地压测产物
+data/
+bench-*/
+webdata/
+*.seg
+stats.json
+downsample.json
